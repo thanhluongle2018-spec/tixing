@@ -1,0 +1,116 @@
+# App containers reach Postgres/Redis via host-published ports
+# (host.docker.internal). This avoids relying on Docker bridge
+# peer-to-peer networking, which can fail in some environments.
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://tixing:tixing@host.docker.internal:5432/tixing?schema=public
+  REDIS_URL: redis://host.docker.internal:6379
+
+x-extra-hosts: &extra-hosts
+  - "host.docker.internal:host-gateway"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tixing
+      POSTGRES_PASSWORD: tixing
+      POSTGRES_DB: tixing
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tixing -d tixing"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps
+    working_dir: /app
+    extra_hosts: *extra-hosts
+    environment:
+      <<: *app-env
+    command:
+      [
+        "bash",
+        "-lc",
+        "for i in 1 2 3 4 5 6 7 8; do pnpm --filter @tixing/db migrate:deploy && exit 0; echo migrate attempt $$i failed; sleep 2; done; exit 1",
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    extra_hosts: *extra-hosts
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-env
+      API_PORT: 3000
+      WEB_ORIGIN: http://localhost:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    extra_hosts: *extra-hosts
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-env
+      WORKER_CONCURRENCY: 2
+      CHECK_TICK_MS: 15000
+      NOTIFY_MAX_ATTEMPTS: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    extra_hosts: *extra-hosts
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

@@ -1,0 +1,13 @@
+node_modules
+dist
+build
+.env
+.env.local
+*.log
+.DS_Store
+coverage
+.turbo
+apps/web/dist
+packages/db/src/generated
+.prisma
+*.tsbuildinfo
