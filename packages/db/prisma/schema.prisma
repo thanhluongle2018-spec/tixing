@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  active
+  paused
+  error
+}
+
+enum ChannelType {
+  telegram
+  bark
+  dingtalk
+  feishu
+  wecom
+  email
+  webhook
+}
+
+enum DeliveryStatus {
+  pending
+  sent
+  failed
+  skipped
+}
+
+model MonitorTask {
+  id              String         @id @default(uuid())
+  name            String
+  platforms       String[]
+  keywords        String[]
+  priceMin        Decimal?       @db.Decimal(12, 2)
+  priceMax        Decimal?       @db.Decimal(12, 2)
+  brand           String?
+  model           String?
+  category        String?
+  seller          String?
+  intervalSeconds Int
+  status          TaskStatus     @default(paused)
+  lastCheckedAt   DateTime?
+  nextCheckAt     DateTime?
+  lastError       String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  channels        TaskChannel[]
+  listings        TaskListing[]
+  deliveries      NotificationDelivery[]
+  jobRuns         JobRun[]
+
+  @@index([status, nextCheckAt])
+}
+
+model Listing {
+  id           String   @id @default(uuid())
+  platform     String
+  externalId   String
+  url          String
+  title        String?
+  price        Decimal? @db.Decimal(12, 2)
+  currency     String   @default("JPY")
+  imageUrl     String?
+  seller       String?
+  publishedAt  DateTime?
+  discoveredAt DateTime @default(now())
+  raw          Json?
+  tasks        TaskListing[]
+  deliveries   NotificationDelivery[]
+
+  @@unique([platform, externalId])
+  @@index([platform, discoveredAt])
+  @@index([discoveredAt])
+}
+
+model TaskListing {
+  id              String      @id @default(uuid())
+  taskId          String
+  listingId       String
+  matchedKeyword  String?
+  createdAt       DateTime    @default(now())
+  task            MonitorTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  listing         Listing     @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, listingId])
+}
+
+model NotificationChannel {
+  id        String       @id @default(uuid())
+  name      String
+  type      ChannelType
+  config    Json
+  enabled   Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  tasks     TaskChannel[]
+  deliveries NotificationDelivery[]
+}
+
+model TaskChannel {
+  taskId    String
+  channelId String
+  task      MonitorTask         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  channel   NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, channelId])
+}
+
+model NotificationDelivery {
+  id         String              @id @default(uuid())
+  listingId  String
+  channelId  String
+  taskId     String
+  status     DeliveryStatus      @default(pending)
+  attempts   Int                 @default(0)
+  lastError  String?
+  sentAt     DateTime?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  listing    Listing             @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  channel    NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  task       MonitorTask         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([listingId, channelId])
+  @@index([status, updatedAt])
+}
+
+model JobRun {
+  id         String      @id @default(uuid())
+  taskId     String
+  startedAt  DateTime    @default(now())
+  finishedAt DateTime?
+  result     String?
+  error      String?
+  itemsFound Int         @default(0)
+  itemsNew   Int         @default(0)
+  task       MonitorTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, startedAt])
+}

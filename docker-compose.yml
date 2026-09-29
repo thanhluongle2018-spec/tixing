@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tixing
+      POSTGRES_PASSWORD: tixing
+      POSTGRES_DB: tixing
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tixing -d tixing"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://tixing:tixing@postgres:5432/tixing?schema=public
+    command: ["pnpm", "--filter", "@tixing/db", "migrate:deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    environment:
+      NODE_ENV: production
+      API_PORT: 3000
+      WEB_ORIGIN: http://localhost:8080
+      DATABASE_URL: postgresql://tixing:tixing@postgres:5432/tixing?schema=public
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://tixing:tixing@postgres:5432/tixing?schema=public
+      REDIS_URL: redis://redis:6379
+      WORKER_CONCURRENCY: 2
+      CHECK_TICK_MS: 15000
+      NOTIFY_MAX_ATTEMPTS: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
