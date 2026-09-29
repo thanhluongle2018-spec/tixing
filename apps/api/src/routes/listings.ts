@@ -2,6 +2,16 @@ import { Hono } from "hono";
 import { prisma, Prisma } from "@tixing/db";
 import { ListingQuerySchema } from "@tixing/shared";
 
+function redactConfig(config: Record<string, unknown>) {
+  const copy: Record<string, unknown> = { ...config };
+  if (typeof copy.botToken === "string" && copy.botToken) copy.botToken = "***";
+  if (typeof copy.deviceKey === "string" && copy.deviceKey) {
+    const key = copy.deviceKey;
+    copy.deviceKey = key.length <= 4 ? "***" : `${key.slice(0, 2)}***${key.slice(-2)}`;
+  }
+  return copy;
+}
+
 export function listingRoutes() {
   const app = new Hono();
 
@@ -45,7 +55,16 @@ export function listingRoutes() {
       },
     });
     if (!item) return c.json({ error: "未找到商品" }, 404);
-    return c.json(item);
+    return c.json({
+      ...item,
+      deliveries: item.deliveries.map((d) => ({
+        ...d,
+        channel: {
+          ...d.channel,
+          config: redactConfig(d.channel.config as Record<string, unknown>),
+        },
+      })),
+    });
   });
 
   return app;

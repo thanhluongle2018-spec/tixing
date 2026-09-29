@@ -3,8 +3,8 @@ import { prisma } from "@tixing/db";
 import { CreateChannelSchema, UpdateChannelSchema } from "@tixing/shared";
 import { getNotifyAdapter } from "@tixing/core";
 
-function redactConfig(type: string, config: Record<string, unknown>) {
-  const copy = { ...config };
+function redactConfig(config: Record<string, unknown>) {
+  const copy: Record<string, unknown> = { ...config };
   if (typeof copy.botToken === "string" && copy.botToken) {
     copy.botToken = "***";
   }
@@ -12,7 +12,27 @@ function redactConfig(type: string, config: Record<string, unknown>) {
     const key = copy.deviceKey;
     copy.deviceKey = key.length <= 4 ? "***" : `${key.slice(0, 2)}***${key.slice(-2)}`;
   }
-  return { type, ...copy };
+  return copy;
+}
+
+function toPublicChannel(ch: {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  config: unknown;
+}) {
+  return {
+    id: ch.id,
+    name: ch.name,
+    type: ch.type,
+    enabled: ch.enabled,
+    createdAt: ch.createdAt,
+    updatedAt: ch.updatedAt,
+    config: redactConfig(ch.config as Record<string, unknown>),
+  };
 }
 
 export function channelRoutes() {
@@ -20,17 +40,7 @@ export function channelRoutes() {
 
   app.get("/", async (c) => {
     const items = await prisma.notificationChannel.findMany({ orderBy: { createdAt: "desc" } });
-    return c.json({
-      items: items.map((ch) => ({
-        id: ch.id,
-        name: ch.name,
-        type: ch.type,
-        enabled: ch.enabled,
-        createdAt: ch.createdAt,
-        updatedAt: ch.updatedAt,
-        config: redactConfig(ch.type, ch.config as Record<string, unknown>),
-      })),
-    });
+    return c.json({ items: items.map(toPublicChannel) });
   });
 
   app.post("/", async (c) => {
@@ -52,7 +62,7 @@ export function channelRoutes() {
         enabled: body.enabled,
       },
     });
-    return c.json(channel, 201);
+    return c.json(toPublicChannel(channel), 201);
   });
 
   app.patch("/:id", async (c) => {
@@ -67,7 +77,7 @@ export function channelRoutes() {
         enabled: body.enabled,
       },
     });
-    return c.json(channel);
+    return c.json(toPublicChannel(channel));
   });
 
   app.delete("/:id", async (c) => {

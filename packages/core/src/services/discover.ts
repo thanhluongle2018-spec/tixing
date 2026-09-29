@@ -77,6 +77,15 @@ export async function runTaskCheck(taskId: string, deps: DiscoverDeps) {
       data: { taskId: task.id, startedAt: now },
     });
 
+    // Reserve the next slot early so the scheduler does not pile up jobs
+    // while this check (including notification retries) is still running.
+    if (!(task.status === "paused" && deps.force)) {
+      await prisma.monitorTask.update({
+        where: { id: task.id },
+        data: { nextCheckAt: new Date(now.getTime() + task.intervalSeconds * 1000) },
+      });
+    }
+
     let itemsFound = 0;
     let itemsNew = 0;
     const errors: string[] = [];
@@ -196,40 +205,71 @@ export async function runTaskCheck(taskId: string, deps: DiscoverDeps) {
               },
             }));
 
-          const payload: NotifyPayload = {
-            platformLabel: platformLabel(listing.platform),
+          const price =
+            listing.price == null
+              ? null
+              : typeof listing.price === "number"
+                ? listing.price
+                : Number(listing.price);
+
+          await attemptDelivery({
+            prisma,
+            deliveryId: delivery.id,
+            startAttempts: delivery.attempts,
+            notifyMaxAttempts,
+            adapter,
+            config: channel.config as Record<string, string>,
+            payload: {
+              platformLabel: platformLabel(listing.platform),
+              title: listing.title,
+              price,
+              currency: listing.currency,
+              imageUrl: listing.imageUrl,
+              seller: listing.seller,
+              url: listing.url,
+            },
+          });
+        }
+      }
+
+      // Resume deliveries left pending/failed after crashes or transient errors.
+      const openDeliveries = await prisma.notificationDelivery.findMany({
+        where: {
+          taskId: task.id,
+          status: { in: ["pending", "failed"] },
+          attempts: { lt: notifyMaxAttempts },
+        },
+        include: { listing: true, channel: true },
+        take: 50,
+      });
+      for (const delivery of openDeliveries) {
+        if (!delivery.channel.enabled) continue;
+        const adapter = getNotifyAdapter(delivery.channel.type);
+        if (!adapter) continue;
+        const listing = delivery.listing;
+        const price =
+          listing.price == null
+            ? null
+            : typeof listing.price === "number"
+              ? listing.price
+              : Number(listing.price);
+        await attemptDelivery({
+          prisma,
+          deliveryId: delivery.id,
+          startAttempts: delivery.attempts,
+          notifyMaxAttempts,
+          adapter,
+          config: delivery.channel.config as Record<string, string>,
+          payload: {
+            platformLabel: platformLabel(listing.platform as PlatformId),
             title: listing.title,
-            price: listing.price,
+            price,
             currency: listing.currency,
             imageUrl: listing.imageUrl,
             seller: listing.seller,
             url: listing.url,
-          };
-
-          let lastError: string | undefined;
-          let ok = false;
-          let attempts = delivery.attempts;
-          const config = channel.config as Record<string, string>;
-          while (attempts < notifyMaxAttempts && !ok) {
-            attempts += 1;
-            const result = await adapter.send(config, payload);
-            ok = result.ok;
-            lastError = result.error;
-            if (!ok) {
-              await sleep(Math.min(500 * 2 ** (attempts - 1), 2_000));
-            }
-          }
-
-          await prisma.notificationDelivery.update({
-            where: { id: delivery.id },
-            data: {
-              attempts,
-              status: ok ? "sent" : "failed",
-              lastError: ok ? null : (lastError ?? "未知错误"),
-              sentAt: ok ? new Date() : null,
-            },
-          });
-        }
+          },
+        });
       }
 
       const nextCheckAt = new Date(now.getTime() + task.intervalSeconds * 1000);
@@ -290,4 +330,42 @@ export async function runTaskCheck(taskId: string, deps: DiscoverDeps) {
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function attemptDelivery(args: {
+  prisma: PrismaClient;
+  deliveryId: string;
+  startAttempts: number;
+  notifyMaxAttempts: number;
+  adapter: NonNullable<ReturnType<typeof getNotifyAdapter>>;
+  config: Record<string, string>;
+  payload: NotifyPayload;
+}) {
+  let lastError: string | undefined;
+  let ok = false;
+  let attempts = args.startAttempts;
+  while (attempts < args.notifyMaxAttempts && !ok) {
+    attempts += 1;
+    // Persist attempt count before network I/O so crashes do not leave attempts=0 forever.
+    await args.prisma.notificationDelivery.update({
+      where: { id: args.deliveryId },
+      data: { attempts, status: "pending", lastError: null },
+    });
+    const result = await args.adapter.send(args.config, args.payload);
+    ok = result.ok;
+    lastError = result.error;
+    if (!ok) {
+      await sleep(Math.min(500 * 2 ** (attempts - 1), 2_000));
+    }
+  }
+
+  await args.prisma.notificationDelivery.update({
+    where: { id: args.deliveryId },
+    data: {
+      attempts,
+      status: ok ? "sent" : "failed",
+      lastError: ok ? null : (lastError ?? "未知错误"),
+      sentAt: ok ? new Date() : null,
+    },
+  });
 }

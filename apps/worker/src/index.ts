@@ -55,11 +55,12 @@ async function enqueueDueTasks() {
   });
 
   for (const task of due) {
+    // Stable jobId prevents re-enqueue while a due check is waiting/active.
     await queue.add(
       "check",
       { taskId: task.id },
       {
-        jobId: `due-${task.id}-${Math.floor(Date.now() / env.CHECK_TICK_MS)}`,
+        jobId: `due-${task.id}`,
         removeOnComplete: 200,
         removeOnFail: 200,
       },

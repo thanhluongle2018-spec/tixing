@@ -1,4 +1,7 @@
 FROM node:22-bookworm-slim AS base
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.33.3 --activate
 WORKDIR /app
 

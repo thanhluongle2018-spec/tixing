@@ -13,6 +13,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Compose 将 Postgres / Redis 端口发布到本机，应用容器通过 `host.docker.internal` 连接（并配置 `extra_hosts: host-gateway`）。这样在部分桥接网络受限的环境也能启动。
+
 服务：
 
 | 服务 | 地址 |
@@ -22,12 +24,12 @@ docker compose up --build
 | Postgres | localhost:5432 |
 | Redis | localhost:6379 |
 
-可选环境变量（写入 compose 或宿主机 `.env` 后注入）：
+可选环境变量（写入项目根目录 `.env`；`api` / `worker` 会通过 `env_file` 读取）：
 
 - `TELEGRAM_BOT_TOKEN`
 - `BARK_BASE_URL`（默认 `https://api.day.app`）
 
-渠道的 chatId / deviceKey 也可在 Web「通知渠道」中配置。
+渠道的 chatId / deviceKey 也可在 Web「通知渠道」中配置。Compose 内置的 Postgres 账号密码仅为本地开发默认值（`tixing` / `tixing`），请勿用于公网。
 
 ## 方式 B：本地进程开发
 

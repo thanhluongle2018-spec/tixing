@@ -18,6 +18,32 @@ function assertSelectablePlatforms(platforms: PlatformId[]) {
   }
 }
 
+function redactChannelConfig(config: Record<string, unknown>) {
+  const copy: Record<string, unknown> = { ...config };
+  if (typeof copy.botToken === "string" && copy.botToken) copy.botToken = "***";
+  if (typeof copy.deviceKey === "string" && copy.deviceKey) {
+    const key = copy.deviceKey;
+    copy.deviceKey = key.length <= 4 ? "***" : `${key.slice(0, 2)}***${key.slice(-2)}`;
+  }
+  return copy;
+}
+
+function serializeTask<T extends { channels?: Array<{ channel: { config: unknown } & object } & object> }>(
+  task: T,
+) {
+  if (!task.channels) return task;
+  return {
+    ...task,
+    channels: task.channels.map((link) => ({
+      ...link,
+      channel: {
+        ...link.channel,
+        config: redactChannelConfig(link.channel.config as Record<string, unknown>),
+      },
+    })),
+  };
+}
+
 export function taskRoutes(checkQueue: Queue) {
   const app = new Hono();
 
@@ -29,7 +55,7 @@ export function taskRoutes(checkQueue: Queue) {
         _count: { select: { listings: true } },
       },
     });
-    return c.json({ items: tasks });
+    return c.json({ items: tasks.map((t) => serializeTask(t)) });
   });
 
   app.get("/:id", async (c) => {
@@ -41,7 +67,7 @@ export function taskRoutes(checkQueue: Queue) {
       },
     });
     if (!task) return c.json({ error: "未找到任务" }, 404);
-    return c.json(task);
+    return c.json(serializeTask(task));
   });
 
   app.post("/", async (c) => {
@@ -70,7 +96,7 @@ export function taskRoutes(checkQueue: Queue) {
       },
       include: { channels: { include: { channel: true } } },
     });
-    return c.json(task, 201);
+    return c.json(serializeTask(task), 201);
   });
 
   app.patch("/:id", async (c) => {
@@ -107,7 +133,7 @@ export function taskRoutes(checkQueue: Queue) {
         include: { channels: { include: { channel: true } } },
       });
     });
-    return c.json(task);
+    return c.json(serializeTask(task));
   });
 
   app.post("/:id/enable", async (c) => {
